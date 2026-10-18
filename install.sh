@@ -103,12 +103,14 @@ if [[ "$DRY_RUN" != "1" ]]; then
   [[ "$(uname -m)" == "x86_64" ]] || die "tproxy-server собирается только под x86_64, здесь $(uname -m)."
   command -v systemctl >/dev/null || die "Нет systemd."
   if [[ -r /etc/os-release ]]; then
+    # os-release читается в подоболочке: его VERSION иначе затирает версию TGweb
     # shellcheck disable=SC1091
-    . /etc/os-release
-    case "${ID:-}:${VERSION_ID%%.*}" in
+    IFS='|' read -r OS_ID OS_VERSION_ID OS_NAME \
+      < <(. /etc/os-release; printf '%s|%s|%s\n' "${ID:-}" "${VERSION_ID:-}" "${PRETTY_NAME:-}")
+    case "${OS_ID}:${OS_VERSION_ID%%.*}" in
       ubuntu:2[2-9]|ubuntu:[3-9][0-9]|debian:1[2-9]|debian:[2-9][0-9])
-        ok "ОС: ${PRETTY_NAME:-$ID}" ;;
-      *) warn "ОС ${PRETTY_NAME:-неизвестна} вне протестированного списка (Ubuntu 22.04+, Debian 12+)." ;;
+        ok "ОС: ${OS_NAME:-$OS_ID}" ;;
+      *) warn "ОС ${OS_NAME:-неизвестна} вне протестированного списка (Ubuntu 22.04+, Debian 12+)." ;;
     esac
   fi
   ok "CPU: $(nproc) ядер, RAM: $(awk '/MemTotal/{printf "%d МБ", $2/1024}' /proc/meminfo)"
