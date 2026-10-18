@@ -281,14 +281,27 @@ if [[ "$DRY_RUN" != "1" ]]; then
   fi
 
   step "Проверка портов 80 и 443"
+  # Caddy, поставленный апстримом (его drop-in tproxy.conf), — это переустановка,
+  # а не чужой веб-сервер: апстрим сам перезапишет конфиг и перезапустит Caddy.
+  own_caddy=0
+  [[ -f /etc/systemd/system/caddy.service.d/tproxy.conf ]] && own_caddy=1
+  ports_ours=0
   for p in 80 443; do
     if ss -lnt "sport = :$p" 2>/dev/null | grep LISTEN >/dev/null; then
       holder="$(ss -lntp "sport = :$p" 2>/dev/null | awk 'NR==2{print $NF}')"
+      if [[ $own_caddy -eq 1 && "$holder" == *'"caddy"'* ]]; then
+        ports_ours=1
+        continue
+      fi
       die "Порт $p занят: ${holder:-неизвестно}
      Наружу должен слушать только Caddy. Например: systemctl disable --now nginx"
     fi
   done
-  ok "80 и 443 свободны"
+  if [[ $ports_ours -eq 1 ]]; then
+    ok "80 и 443 держит Caddy этой установки — переустановка"
+  else
+    ok "80 и 443 свободны"
+  fi
 
   if command -v ufw >/dev/null && ufw status 2>/dev/null | grep '^Status: active' >/dev/null; then
     ufw allow 80/tcp >/dev/null 2>&1 || true
