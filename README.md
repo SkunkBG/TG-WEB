@@ -45,6 +45,82 @@
 
 ---
 
+## Пошагово: новый сервер с нуля
+
+Полный путь от купленного VPS до рабочего прокси. Хостер обычно выдаёт root с паролем —
+последний раз он понадобится на шаге 2.
+
+**1. DNS.** У регистратора или в Cloudflare создайте A-запись субдомена на IP сервера
+(в Cloudflare — серая тучка, DNS only). AAAA не создавайте, если у сервера нет рабочего
+IPv6. Проверка с вашего компьютера:
+
+```bash
+dig +short A proxy.example.com      # должен вернуть IP сервера
+```
+
+**2. Вход по ключу.** На своём компьютере, один раз:
+
+```bash
+ssh-keygen -t ed25519               # только если ключа ещё нет (~/.ssh/id_ed25519)
+ssh-copy-id root@IP_СЕРВЕРА         # спросит пароль от хостера — в последний раз
+ssh root@IP_СЕРВЕРА                 # должен войти БЕЗ пароля
+```
+
+На Windows (PowerShell) вместо `ssh-copy-id`:
+
+```powershell
+type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh root@IP_СЕРВЕРА "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
+```
+
+**3. Установка прокси** — на сервере:
+
+```bash
+apt-get update && apt-get install -y git
+git clone https://github.com/SkunkBG/TG-WEB.git && cd TG-WEB
+bash install.sh --hostname proxy.example.com --email admin@example.com --project "My Project" --yes
+```
+
+Email — только контакт для Let's Encrypt, писем об истечении сертификатов он больше не
+шлёт; подойдёт адрес на вашем же домене, ящик не нужен. В конце скрипт напечатает ссылку —
+проверьте её в Telegram.
+
+**4. Защита сервера** — файрвол, fail2ban, журнал, автообновления
+(подробно — в разделе [Защита и настройка сервера](#защита-и-настройка-сервера)):
+
+```bash
+bash harden.sh --skip-tuning
+```
+
+**5. Отключить вход по паролю.** Только после того, как шаг 2 работает. Сессию не
+закрывайте, пока не проверите вход вторым окном:
+
+```bash
+printf 'PermitRootLogin prohibit-password\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
+  > /etc/ssh/sshd_config.d/000-tgweb-no-password.conf
+sshd -t && systemctl reload ssh
+sshd -T | grep -E '^(passwordauthentication|permitrootlogin) '
+# ожидается: passwordauthentication no, permitrootlogin without-password
+```
+
+Если `sshd -T` всё ещё показывает `passwordauthentication yes`, значит, другой файл в
+`/etc/ssh/sshd_config.d/` включает пароль раньше нашего (у некоторых хостеров это
+`00password.conf`): `grep -ri passwordauthentication /etc/ssh/sshd_config.d/`. Исправьте
+`yes` на `no` в найденном файле, повторите `sshd -t && systemctl reload ssh` и проверку.
+
+Затем **в новом окне** `ssh root@IP_СЕРВЕРА` — должен пустить по ключу. Ключ потерян —
+вход только через веб-консоль (VNC) в панели хостера.
+
+**6. Резервная копия.** Сохраните к себе каталоги с секретами — без них при переезде
+поменяются ссылки у всех пользователей:
+
+```bash
+ssh root@IP_СЕРВЕРА 'tar czf - /etc/tgweb /etc/tproxy-server' > tgweb-backup.tar.gz
+```
+
+Храните архив как пароль: в нём секреты прокси.
+
+---
+
 ## Установка
 
 На минимальных образах Debian/Ubuntu `git` не предустановлен — поставьте его первым:
