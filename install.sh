@@ -159,10 +159,12 @@ prompt_value FQDN \
   "" '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' \
   "Нужен домен в нижнем регистре минимум с одной точкой, например proxy.example.com"
 
+# Тот же регексп, что в deploy/install.sh апстрима: иначе адрес с кириллицей
+# (например, «л» от русской раскладки) проходит здесь и падает уже там.
 prompt_value EMAIL \
   "Email для Let's Encrypt (на него придут уведомления об истечении сертификата):" \
-  "" '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' \
-  "Похоже, это не email"
+  "" '^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$' \
+  "Нужен email латиницей, например admin@example.com — проверьте раскладку"
 
 default_project="$(printf '%s' "${FQDN%%.*}" | sed 's/^./\U&/')"
 prompt_value PROJECT \
@@ -376,7 +378,7 @@ subst() {
   python3 - "$f" <<'PY'
 import os, sys
 path = sys.argv[1]
-keys = ["HOST","EMAIL","PROJECT","PROJECT_LC","ACCENT","H1","LEAD","WHY",
+keys = ["HOST","PROJECT","PROJECT_LC","ACCENT","H1","LEAD","WHY",
         "BUILD","ASSET1","ASSET2","DURATION","YEAR"]
 with open(path, encoding="utf-8") as fh:
     data = fh.read()
@@ -387,7 +389,7 @@ with open(path, "w", encoding="utf-8") as fh:
 PY
 }
 
-export TGW_HOST="$FQDN" TGW_EMAIL="$EMAIL" TGW_PROJECT="$PROJECT" \
+export TGW_HOST="$FQDN" TGW_PROJECT="$PROJECT" \
        TGW_PROJECT_LC="$PROJECT_LC" TGW_ACCENT="$ACCENT" TGW_H1="$H1" \
        TGW_LEAD="$LEAD" TGW_WHY="$WHY" TGW_BUILD="$BUILD_ID" \
        TGW_ASSET1="$ASSET1" TGW_ASSET2="$ASSET2" TGW_DURATION="$DURATION" \
