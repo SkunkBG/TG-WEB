@@ -52,6 +52,7 @@ die()  { printf '\n  %sошибка:%s %s\n\n' "$RED" "$OFF" "$1" >&2; exit 1; }
 
 DO_UPGRADE=1; DO_FIREWALL=1; DO_FAIL2BAN=1; DO_TUNING=1
 DO_EXTRAS=1; DISABLE_IPV6=1; HARDEN_SSH=0; RESET_FIREWALL=0; ASSUME_YES=0
+AUTO_REBOOT=""
 EXTRA_PORTS=()
 usage() {
   cat <<EOF
@@ -64,6 +65,8 @@ TGweb harden — подготовка и защита сервера.
                      в authorized_keys есть ключи, с проверкой через sshd -T
   --allow-port P     открыть ещё порт, например 8443/tcp (можно несколько раз)
   --keep-ipv6        не отключать IPv6
+  --auto-reboot HH:MM  после автообновления ядра перезагружаться в это время
+                     (иначе исправления ядра не действуют до ручной перезагрузки)
   --reset-firewall   сбросить ВСЕ существующие правила ufw
   --skip-upgrade     не делать apt upgrade
   --skip-firewall    не настраивать ufw
@@ -81,6 +84,9 @@ while [[ $# -gt 0 ]]; do
       [[ "${2:-}" =~ ^[0-9]{1,5}(/(tcp|udp))?$ ]] || die "--allow-port: ожидается ПОРТ или ПОРТ/tcp|udp"
       EXTRA_PORTS+=("$2"); shift 2 ;;
     --keep-ipv6)      DISABLE_IPV6=0; shift ;;
+    --auto-reboot)
+      [[ "${2:-}" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] || die "--auto-reboot: время в формате ЧЧ:ММ, например 04:00"
+      AUTO_REBOOT="$2"; shift 2 ;;
     --reset-firewall) RESET_FIREWALL=1; shift ;;
     --skip-upgrade)   DO_UPGRADE=0; shift ;;
     --skip-firewall)  DO_FIREWALL=0; shift ;;
@@ -171,7 +177,6 @@ if [[ $DO_UPGRADE -eq 1 ]] && confirm "Обновить систему (apt upgr
   "${APT[@]}" update -qq; apt_updated=1
   "${APT[@]}" upgrade -y -qq >/dev/null
   ok "Система обновлена"
-  [[ -e /var/run/reboot-required ]] && warn "Нужна перезагрузка (новое ядро/библиотеки) — сделайте её в удобное время"
 else
   info "apt upgrade пропущен"
 fi
@@ -451,7 +456,19 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
     systemctl enable --now unattended-upgrades >/dev/null 2>&1 || true
-    ok "unattended-upgrades включены (перезагрузку после обновления ядра — вручную)"
+    if [[ -n "$AUTO_REBOOT" ]]; then
+      cat > /etc/apt/apt.conf.d/52tgweb-auto-reboot <<EOF
+// Создано TGweb harden.sh --auto-reboot: обновление ядра применяется только
+// после перезагрузки, поэтому перезагружаемся сами в тихое время.
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-Time "$AUTO_REBOOT";
+EOF
+      ok "unattended-upgrades включены, автоперезагрузка после обновления ядра в $AUTO_REBOOT"
+    else
+      ok "unattended-upgrades включены"
+      info "Перезагрузку после обновления ядра — вручную (или --auto-reboot 04:00)"
+    fi
   else
     info "Автообновления не включены"
   fi
@@ -501,6 +518,15 @@ fi
 
 # ─────────────────────────────── итог ────────────────────────────────────
 step "Итог"
+# Новое ядро действует только после перезагрузки. /var/run/reboot-required
+# ставит хук unattended-upgrades, которого могло не быть при установке ядра,
+# поэтому сравниваем работающее ядро с новейшим установленным напрямую.
+running_kernel="$(uname -r)"
+newest_kernel="$(find /boot -maxdepth 1 -name 'vmlinuz-*' -printf '%f\n' 2>/dev/null | sed 's/^vmlinuz-//' | sort -V | tail -n1)"
+if [[ -n "$newest_kernel" && "$newest_kernel" != "$running_kernel" ]] || [[ -e /var/run/reboot-required ]]; then
+  warn "НУЖНА ПЕРЕЗАГРУЗКА: работает ядро $running_kernel, установлено ${newest_kernel:-новое}."
+  warn "Исправления безопасности ядра не действуют до reboot. Прокси поднимется сам."
+fi
 printf '  CC/qdisc   : %s / %s\n' "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo ?)" \
   "$(sysctl -n net.core.default_qdisc 2>/dev/null || echo ?)"
 printf '  IPv6       : %s\n' "$( [[ "$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo 0)" == 1 ]] && echo отключён || echo включён )"
@@ -510,6 +536,8 @@ printf '  nofile     : %s\n' "$(systemctl show -p DefaultLimitNOFILE --value 2>/
 printf '  swap       : %s МБ\n' "$(free -m | awk '/^Swap:/{print $2}')"
 printf '  ufw        : %s\n' "$(ufw status 2>/dev/null | head -n1 | sed 's/Status: //')"
 printf '  fail2ban   : %s\n' "$(systemctl is-active fail2ban 2>/dev/null || true)"
+printf '  автообновл.: %s%s\n' "$(systemctl is-enabled apt-daily-upgrade.timer 2>/dev/null || echo ?)" \
+  "$( [[ -f /etc/apt/apt.conf.d/52tgweb-auto-reboot ]] && printf ', автоперезагрузка %s' "$(sed -n 's/.*Automatic-Reboot-Time "\(.*\)".*/\1/p' /etc/apt/apt.conf.d/52tgweb-auto-reboot)" )"
 printf '  ssh        : password=%s, rootlogin=%s\n' "$(ssh_effective passwordauthentication)" "$(ssh_effective permitrootlogin)"
 printf '\n  Слушают снаружи (не loopback):\n'
 ss -lntuH 2>/dev/null | awk '{print $1, $5}' \
